@@ -193,33 +193,44 @@ class SpatialTransformer(nn.Cell):
     Finally, reshape to image
     """
     def __init__(self, in_channels, n_heads, d_head,
-                 depth=1, dropout=1.0, context_dim=None, use_checkpoint=True, dtype=ms.float32):
+                 depth=1, dropout=1.0, context_dim=None, use_checkpoint=True, use_linear=False, dtype=ms.float32):
         super().__init__()
         self.in_channels = in_channels
         self.dtype=dtype
         inner_dim = n_heads * d_head
         self.norm = Normalize(in_channels)
 
-        self.proj_in = nn.Conv2d(in_channels,
-                                 inner_dim,
-                                 kernel_size=1,
-                                 stride=1,
-                                 padding=0,
-                                 has_bias=True,
-                                 pad_mode='pad').to_float(dtype)
+        if not use_linear:
+            self.proj_in = nn.Conv2d(in_channels,
+                                     inner_dim,
+                                     kernel_size=1,
+                                     stride=1,
+                                     padding=0,
+                                     has_bias=True,
+                                     pad_mode='pad').to_float(dtype)
+        else:
+            self.proj_in = nn.Dense(in_channels,
+                                    inner_dim).to_float(dtype)
+
+
         self.transformer_blocks = nn.CellList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim, 
                                    checkpoint=use_checkpoint, dtype=self.dtype)
                 for d in range(depth)]
         )
 
-        self.proj_out = zero_module(nn.Conv2d(inner_dim,
-                                              in_channels,
-                                              kernel_size=1,
-                                              stride=1,
-                                              padding=0,
-                                              has_bias=True,
-                                              pad_mode='pad').to_float(self.dtype))
+        if not use_linear:
+            self.proj_out = zero_module(nn.Conv2d(inner_dim,
+                                                  in_channels,
+                                                  kernel_size=1,
+                                                  stride=1,
+                                                  padding=0,
+                                                  has_bias=True,
+                                                  pad_mode='pad').to_float(self.dtype))
+        else:
+            self.proj_out = zero_module(nn.Dense(in_channels, inner_dim).to_float(dtype))
+
+        self.use_linear = use_linear
         self.reshape = ops.Reshape()
         self.transpose = ops.Transpose()
 
@@ -228,13 +239,19 @@ class SpatialTransformer(nn.Cell):
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
-        x = self.proj_in(x)
+        if not self.use_linear:
+            x = self.proj_in(x)
         x = self.reshape(x, (b, c, h*w))    # (b, c, h*w)
         x = self.transpose(x, (0, 2, 1))    # (b, h*w, c)
+        if self.use_linear:
+            x = self.proj_in(x)
         for block in self.transformer_blocks:
             x = block(x, context=context)
+        if self.use_linear:
+            x = self.proj_out(x)
         x = self.reshape(x, (b, h, w, c))
         x = self.transpose(x, (0, 3, 1, 2))
-        x = self.proj_out(x)
+        if not self.use_linear:
+            x = self.proj_out(x)
         return x + x_in        
                                  

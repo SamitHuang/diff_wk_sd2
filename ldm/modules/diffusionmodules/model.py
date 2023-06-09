@@ -259,6 +259,8 @@ class Encoder(nn.Cell):
             down = nn.Cell()
             down.block = block
             down.attn = attn
+            # if i_level != self.num_resolutions-1:
+            #     down.downsample = downsample
             down.downsample = downsample
             curr_res = curr_res // 2
             down.update_parameters_name(prefix=self.param_prefix + f"down.{i_level}.")
@@ -383,6 +385,8 @@ class Decoder(nn.Cell):
             up = nn.Cell()
             up.block = block
             up.attn = attn
+            # if i_level != 0:
+            #     up.upsample = upsample
             up.upsample = upsample
             curr_res = curr_res * 2
             up.update_parameters_name(prefix=self.param_prefix + f"up.{i_level}.")
@@ -421,6 +425,7 @@ class Decoder(nn.Cell):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
+
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 

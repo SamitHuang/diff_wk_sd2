@@ -202,7 +202,6 @@ class ResBlock(nn.Cell):
             h = self.out_layers_silu(h)
             h = self.out_layers_drop(h)
             h = self.out_layers_conv(h, emb, context)
-
         return self.skip_connection(x) + h
 
 
@@ -299,6 +298,7 @@ class UNetModel(nn.Cell):
         context_dim=None,                 # custom transformer support
         n_embed=None,                     # custom support for prediction of discrete ids into codebook of first stage vq model
         legacy=True,
+        use_linear_in_transformer=False
     ):
         super().__init__()
 
@@ -389,7 +389,7 @@ class UNetModel(nn.Cell):
                             use_new_attention_order=use_new_attention_order,
                         ) if not use_spatial_transformer else SpatialTransformer(
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim,
-                            use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout
+                            use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout, use_linear=use_linear_in_transformer
                         )
                     )
                 self.input_blocks.append(layers)
@@ -445,7 +445,7 @@ class UNetModel(nn.Cell):
                         use_new_attention_order=use_new_attention_order,
                     ) if not use_spatial_transformer else SpatialTransformer(
                                     ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim,
-                                    use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout
+                                    use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout, use_linear=use_linear_in_transformer
                                 ),
                     ResBlock(
                         ch,
@@ -494,7 +494,7 @@ class UNetModel(nn.Cell):
                             use_new_attention_order=use_new_attention_order,
                         ) if not use_spatial_transformer else SpatialTransformer(
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim,
-                            use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout
+                            use_checkpoint=use_checkpoint, dtype=self.dtype, dropout=self.dropout, use_linear=use_linear_in_transformer
                         )
                     )
                 if level and i == num_res_blocks:
@@ -559,10 +559,10 @@ class UNetModel(nn.Cell):
             for cell in celllist:
                 h = cell(h, emb, context)
             hs.append(h)
-            
+
         for module in self.middle_block:
             h = module(h, emb, context)
-        
+
         hs_index = -1
         for celllist in self.output_blocks:
             h = self.cat((h, hs[hs_index]))

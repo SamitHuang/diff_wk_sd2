@@ -73,10 +73,9 @@ class DPMSolverSampler(object):
             img = x_T
 
         ns = NoiseScheduleVP('discrete', alphas_cumprod=self.alphas_cumprod)
+
         model_fn = model_wrapper(
-            lambda x, t, c: self.model.apply_model(x, t,
-                                                   c_concat=c if self.model.model.conditioning_key == 'concat' else None,
-                                                   c_crossattn=c if self.model.model.conditioning_key == 'crossattn' else None),
+            lambda x, t, c: self.model.apply_model(x, t, c),
             ns,
             model_type="noise",
             guidance_type="classifier-free",

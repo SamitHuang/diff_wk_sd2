@@ -16,7 +16,7 @@ import mindspore as ms
 import mindspore.nn as nn
 import mindspore.ops as ops
 from mindspore import Tensor
-from ldm.models.clip_zh.simple_tokenizer import WordpieceTokenizer
+from ldm.models.clip_zh.simple_tokenizer import tokenize
 from .text_encoder import TextEncoder
 
 
@@ -25,29 +25,11 @@ class FrozenCLIPEmbedder_ZH(nn.Cell):
         super(FrozenCLIPEmbedder_ZH, self).__init__()
         self.dtype = ms.float16 if use_fp16 else ms.float32
         self.max_length = max_length
-        self.tokenizer = WordpieceTokenizer()
-        self.transformer = TextEncoder(context_length=77, vocab_size=49408, output_dim=768, width=768, layers=12, heads=12, dtype=self.dtype)
+        self.tokenizer = tokenize
+        self.transformer = TextEncoder(context_length=77, vocab_size=49408, output_dim=1024, width=1024, layers=23, heads=16, dtype=self.dtype)
 
     def tokenize(self, texts):
-        SOT_TEXT = "[CLS]"
-        EOT_TEXT = "[SEP]"
-        CONTEXT_LEN = 77
-
-        if isinstance(texts, str):
-            texts = [texts]
-
-        sot_token = self.tokenizer.encoder[SOT_TEXT]
-        eot_token = self.tokenizer.encoder[EOT_TEXT]
-        all_tokens = [[sot_token] + self.tokenizer.encode(text) + [eot_token] for text in texts]
-        result = ops.Zeros()((len(all_tokens), CONTEXT_LEN), ms.int64)
-
-        for i, tokens in enumerate(all_tokens):
-            if len(tokens) > CONTEXT_LEN:
-                tokens = tokens[:CONTEXT_LEN - 1] + [eot_token]
-
-            result[i, : len(tokens)] = Tensor(tokens)
-
-        return result
+        return self.tokenizer(texts)
 
     def encode(self, text):
         batch_encoding = self.tokenize(text)

@@ -12,32 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
+
 import gzip
 import html
+import os
 from functools import lru_cache
-from pathlib import Path
 
 import ftfy
 import regex as re
-import os
 
-from .utils import is_control, is_whitespace, is_chinese_char, \
-    is_punctuation, strip_accents
-
-SOT_TEXT = "<|startoftext|>"
-EOT_TEXT = "<|endoftext|>"
-CONTEXT_LEN = 77
-
-vocab_path_en = "bpe_simple_vocab_16e6.txt.gz"
-vocab_path_zh = "vocab_zh.txt"
-
-@lru_cache()
-def default_wordpiece():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_zh.txt")
 
 @lru_cache()
 def default_bpe():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bpe_simple_vocab_16e6.txt.gz")
+
 
 @lru_cache()
 def bytes_to_unicode():
@@ -46,21 +34,17 @@ def bytes_to_unicode():
     The reversible bpe codes work on unicode strings.
     This means you need a large # of unicode characters in your vocab if you want to avoid UNKs.
     When you're at something like a 10B token dataset you end up needing around 5K for decent coverage.
-    This is a significant percentage of your normal, say, 32K bpe vocab.
+    This is a signficant percentage of your normal, say, 32K bpe vocab.
     To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
     And avoids mapping to whitespace/control characters the bpe code barfs on.
     """
-    bs = (
-            list(range(ord("!"), ord("~") + 1))
-            + list(range(ord("¡"), ord("¬") + 1))
-            + list(range(ord("®"), ord("ÿ") + 1))
-    )
+    bs = list(range(ord("!"), ord("~")+1))+list(range(ord("¡"), ord("¬")+1))+list(range(ord("®"), ord("ÿ")+1))
     cs = bs[:]
     n = 0
-    for b in range(2 ** 8):
+    for b in range(2**8):
         if b not in bs:
             bs.append(b)
-            cs.append(2 ** 8 + n)
+            cs.append(2**8+n)
             n += 1
     cs = [chr(n) for n in cs]
     return dict(zip(bs, cs))
@@ -85,49 +69,40 @@ def basic_clean(text):
 
 
 def whitespace_clean(text):
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r'\s+', ' ', text)
     text = text.strip()
     return text
 
 
-class BpeTokenizer(object):
+class SimpleTokenizer(object):
     def __init__(self, bpe_path: str = default_bpe()):
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
-
-        vocab = list(bytes_to_unicode().values())
-        vocab = vocab + [v + "</w>" for v in vocab]
-
-        merges = gzip.open(bpe_path).read().decode("utf-8").split("\n")
-        merges = merges[1: 49152 - 256 - 2 + 1]
+        merges = gzip.open(bpe_path).read().decode("utf-8").split('\n')
+        merges = merges[1:49152-256-2+1]
         merges = [tuple(merge.split()) for merge in merges]
-
+        vocab = list(bytes_to_unicode().values())
+        vocab = vocab + [v+'</w>' for v in vocab]
         for merge in merges:
-            vocab.append("".join(merge))
-        vocab.extend([SOT_TEXT, EOT_TEXT])
+            vocab.append(''.join(merge))
+        vocab.extend(['<|startoftext|>', '<|endoftext|>'])
         self.encoder = dict(zip(vocab, range(len(vocab))))
         self.decoder = {v: k for k, v in self.encoder.items()}
         self.bpe_ranks = dict(zip(merges, range(len(merges))))
-        self.cache = {
-            SOT_TEXT: SOT_TEXT,
-            EOT_TEXT: EOT_TEXT,
-        }
-        self.pat = re.compile(
-            r"""<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[\p{L}]+|[\p{N}]|[^\s\p{L}\p{N}]+""",
-            re.IGNORECASE,
-        )
+        self.cache = {'<|startoftext|>': '<|startoftext|>', '<|endoftext|>': '<|endoftext|>'}
+        self.pat = re.compile(r"""<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[\p{L}]+|[\p{N}]|[^\s\p{L}\p{N}]+""", re.IGNORECASE)
 
     def bpe(self, token):
         if token in self.cache:
             return self.cache[token]
-        word = tuple(token[:-1]) + (token[-1] + "</w>",)
+        word = tuple(token[:-1]) + ( token[-1] + '</w>',)
         pairs = get_pairs(word)
 
         if not pairs:
-            return token + "</w>"
+            return token+'</w>'
 
         while True:
-            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
+            bigram = min(pairs, key = lambda pair: self.bpe_ranks.get(pair, float('inf')))
             if bigram not in self.bpe_ranks:
                 break
             first, second = bigram
@@ -138,11 +113,12 @@ class BpeTokenizer(object):
                     j = word.index(first, i)
                     new_word.extend(word[i:j])
                     i = j
-                except:  # noqa: E722
+                except:
                     new_word.extend(word[i:])
                     break
-                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
-                    new_word.append(first + second)
+
+                if word[i] == first and i < len(word)-1 and word[i+1] == second:
+                    new_word.append(first+second)
                     i += 2
                 else:
                     new_word.append(word[i])
@@ -153,7 +129,7 @@ class BpeTokenizer(object):
                 break
             else:
                 pairs = get_pairs(word)
-        word = " ".join(word)
+        word = ' '.join(word)
         self.cache[token] = word
         return word
 
@@ -161,198 +137,34 @@ class BpeTokenizer(object):
         bpe_tokens = []
         text = whitespace_clean(basic_clean(text)).lower()
         for token in re.findall(self.pat, text):
-            token = "".join(self.byte_encoder[b] for b in token.encode("utf-8"))
-            bpe_tokens.extend(
-                self.encoder[bpe_token] for bpe_token in self.bpe(token).split(" ")
-            )
+            token = ''.join(self.byte_encoder[b] for b in token.encode('utf-8'))
+            bpe_tokens.extend(self.encoder[bpe_token] for bpe_token in self.bpe(token).split(' '))
         return bpe_tokens
 
     def decode(self, tokens):
-        text = "".join([self.decoder[token] for token in tokens])
-        text = (
-            bytearray([self.byte_decoder[c] for c in text])
-                .decode("utf-8", errors="replace")
-                .replace("</w>", " ")
-        )
+        text = ''.join([self.decoder[token] for token in tokens])
+        text = bytearray([self.byte_decoder[c] for c in text]).decode('utf-8', errors="replace").replace('</w>', ' ')
         return text
 
+import mindspore as ms
+_tokenizer = SimpleTokenizer()
+def tokenize(texts, context_length = 77, truncate = False):
+    if isinstance(texts, str):
+        texts = [texts]
 
-class WordpieceTokenizer(object):
-    def __init__(self, vocab_path: str = default_wordpiece()):
-        with open(vocab_path) as vocab_file:
-            vocab = [line.strip() for line in vocab_file]
-        self.encoder = dict(zip(vocab, range(len(vocab))))
-        self.decoder = {v: k for k, v in self.encoder.items()}
-        self.max_input_chars_per_word = 100
-        self.tokenize_chinese_chars = True
-        self.unk_token = "[UNK]"
-        self.never_split = [self.unk_token, SOT_TEXT, EOT_TEXT]
+    sot_token = _tokenizer.encoder["<|startoftext|>"]
+    eot_token = _tokenizer.encoder["<|endoftext|>"]
+    all_tokens = [[sot_token] + _tokenizer.encode(text) + [eot_token] for text in texts]
 
-    @staticmethod
-    def __whitespace_tokenize(text):
-        """Runs basic whitespace cleaning and splitting on a piece of text."""
-        text = text.strip()
-        if not text:
-            return []
-        tokens = text.split()
-        return tokens
+    result = ms.ops.Zeros()((len(all_tokens), context_length), ms.int64)
 
-    def __split_on_punc(self, text):
-        """Splits punctuation on a piece of text."""
-        if self.never_split and text in self.never_split:
-            return [text]
-        chars = list(text)
-        i = 0
-        start_new_word = True
-        output = []
-        while i < len(chars):
-            char = chars[i]
-            if is_punctuation(char):
-                output.append([char])
-                start_new_word = True
+    for i, tokens in enumerate(all_tokens):
+        if len(tokens) > context_length:
+            if truncate:
+                tokens = tokens[:context_length]
+                tokens[-1] = eot_token
             else:
-                if start_new_word:
-                    output.append([])
-                start_new_word = False
-                output[-1].append(char)
-            i += 1
+                raise RuntimeError(f"Input {texts[i]} is too long for context length {context_length}")
+        result[i, :len(tokens)] = ms.Tensor(tokens)
 
-        return ["".join(x) for x in output]
-
-    @staticmethod
-    def __clean_text(text):
-        """Performs invalid character removal and whitespace cleanup on text."""
-        output = []
-        for char in text:
-            cp = ord(char)
-            if cp == 0 or cp == 0xFFFD or is_control(char):
-                continue
-            if is_whitespace(char):
-                output.append(" ")
-            else:
-                output.append(char)
-        return "".join(output)
-
-    @staticmethod
-    def __tokenize_chinese_chars(text):
-        """Adds whitespace around any CJK character."""
-        output = []
-        for char in text:
-            cp = ord(char)
-            if is_chinese_char(cp):
-                output.append(" ")
-                output.append(char)
-                output.append(" ")
-            else:
-                output.append(char)
-        return "".join(output)
-
-    def __wordpiece_tokenize(self, text):
-        output_tokens = []
-        for token in self.__whitespace_tokenize(text):
-            chars = list(token)
-            if len(chars) > self.max_input_chars_per_word:
-                output_tokens.append(self.unk_token)
-                continue
-
-            is_bad = False
-            start = 0
-            sub_tokens = []
-            while start < len(chars):
-                end = len(chars)
-                cur_substr = None
-                while start < end:
-                    substr = "".join(chars[start:end])
-                    if start > 0:
-                        substr = "##" + substr
-                    if substr in self.encoder:
-                        cur_substr = substr
-                        break
-                    end -= 1
-                if cur_substr is None:
-                    is_bad = True
-                    break
-                sub_tokens.append(cur_substr)
-                start = end
-
-            if is_bad:
-                output_tokens.append(self.unk_token)
-            else:
-                output_tokens.extend(sub_tokens)
-        return output_tokens
-
-    def __basic_tokenize(self, text):
-        # union() returns a new set by concatenating the two sets.
-        text = self.__clean_text(text)
-
-        # This was added on November 1st, 2018 for the multilingual and Chinese
-        # models. This is also applied to the English models now, but it doesn't
-        # matter since the English models were not trained on any Chinese data
-        # and generally don't have any Chinese data in them (there are Chinese
-        # characters in the vocabulary because Wikipedia does have some Chinese
-        # words in the English Wikipedia.).
-        if self.tokenize_chinese_chars:
-            text = self.__tokenize_chinese_chars(text)
-        orig_tokens = self.__whitespace_tokenize(text)
-        split_tokens = []
-        for token in orig_tokens:
-            if token not in self.never_split:
-                token = token.lower()
-                token = strip_accents(token)
-            split_tokens.extend(self.__split_on_punc(token))
-        output_tokens = self.__whitespace_tokenize(" ".join(split_tokens))
-        return output_tokens
-
-    def text_tokenize(self, text):
-        split_tokens = []
-        for token in self.__basic_tokenize(text):
-            if token in self.never_split:
-                split_tokens.append(token)
-            else:
-                split_tokens += self.__wordpiece_tokenize(token)
-        return split_tokens
-
-    def encode(self, text):
-        tokens = self.text_tokenize(text)
-        return [self.encoder.get(token, self.unk_token) for token in tokens]
-
-    def decode(self, tokens):
-        segments = [self.decoder.get(token, self.unk_token) for token in tokens]
-        text = ""
-        for segment in segments:
-            if segment in self.never_split:
-                text += segment
-            else:
-                text += segment.lstrip("##")
-        return text
-
-
-# default tokenizer for 'en'
-# _tokenizer = BpeTokenizer(Path(__file__).with_name(vocab_path_en).as_posix())
-
-
-def set_tokenizer_lang(lang="en", context_length=77):
-    global _tokenizer, SOT_TEXT, EOT_TEXT, CONTEXT_LEN
-    CONTEXT_LEN = context_length
-    if lang == "en":
-        vocab_en = Path(__file__).with_name(vocab_path_en).as_posix()
-        _tokenizer = BpeTokenizer(vocab_en)
-    elif lang == "zh":
-        vocab_zh = Path(__file__).with_name(vocab_path_zh).as_posix()
-        SOT_TEXT = "[CLS]"
-        EOT_TEXT = "[SEP]"
-        _tokenizer = WordpieceTokenizer(vocab_zh)
-    else:
-        raise RuntimeError("Tokenizer for language \"{}\" is not supported."
-                           .format(lang))
-
-
-@lru_cache()
-def get_sot_token():
-    return _tokenizer.encoder[SOT_TEXT]
-
-
-@lru_cache()
-def get_eot_token():
-    return _tokenizer.encoder[EOT_TEXT]
-
+    return result

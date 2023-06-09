@@ -64,15 +64,9 @@ class MultiheadAttention(nn.Cell):
         return attn_output
 
 
-class QuickGELU(nn.Cell):
+class QuickGELU(nn.GELU):
     def __init__(self):
         super(QuickGELU, self).__init__()
-        self.ratio = 1.702
-        self.sigmoid = nn.Sigmoid()
-
-    def construct(self, x):
-        return x * self.sigmoid(self.ratio * x)
-
 
 class AttentionWithMask(nn.Cell):
     def __init__(self, d_model, n_head, attn_mask, dtype=ms.float32):
@@ -83,12 +77,11 @@ class AttentionWithMask(nn.Cell):
     def construct(self, x):
         return self.attn(x, x, x, self.attn_mask)
 
-
 class ResidualAttentionBlock(nn.Cell):
     def __init__(self, d_model, n_head, attn_mask, dtype=ms.float32):
         super(ResidualAttentionBlock, self).__init__()
         self.attn = AttentionWithMask(d_model, n_head, attn_mask, dtype=dtype)
-        self.ln_1 = nn.LayerNorm([d_model]).to_float(dtype)
+        self.ln_1 = nn.LayerNorm([d_model], epsilon=1e-5).to_float(dtype)
         self.c_fc = nn.Dense(d_model, d_model * 4).to_float(dtype)
         self.gelu = QuickGELU()
         self.c_proj = nn.Dense(d_model * 4, d_model).to_float(dtype)
@@ -97,7 +90,7 @@ class ResidualAttentionBlock(nn.Cell):
             self.gelu,
             self.c_proj
         ])
-        self.ln_2 = nn.LayerNorm([d_model]).to_float(dtype)
+        self.ln_2 = nn.LayerNorm([d_model], epsilon=1e-5).to_float(dtype)
 
     def construct(self, x):
         x = x + self.attn(self.ln_1(x))
@@ -151,7 +144,6 @@ class TextEncoder(nn.Cell):
         bsz, ctx_len = text.shape
         flatten_id = text.flatten()
         gather_result = self.gather(self.embedding_table, flatten_id, 0)
-
         x = self.reshape(gather_result, (bsz, ctx_len, -1))
         x = x + self.positional_embedding
         x = x.transpose(1, 0, 2)

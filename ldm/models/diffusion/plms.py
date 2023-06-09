@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
+import time
+
 import mindspore as ms
-from mindspore import ops
+import mindspore.nn as nn
+import mindspore.ops as ops
 
 from ldm.modules.diffusionmodules.util import (
     make_ddim_sampling_parameters,
@@ -33,8 +36,9 @@ class PLMSSampler():
             raise ValueError('ddim_eta must be 0 for PLMS')
         self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method=ddim_discretize, num_ddim_timesteps=ddim_num_steps,
                                                   num_ddpm_timesteps=self.ddpm_num_timesteps,verbose=verbose)
-        
+
         alphas_cumprod = self.model.alphas_cumprod
+
         assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps, 'alphas have to be defined for each timestep'
         
         self.betas = self.model.betas
@@ -47,11 +51,12 @@ class PLMSSampler():
         self.log_one_minus_alphas_cumprod = ops.log(1. - alphas_cumprod)
         self.sqrt_recip_alphas_cumprod = ops.sqrt(1. / alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = ops.sqrt(1. / alphas_cumprod - 1)
-        
         # ddim sampling parameters
+
         ddim_sigmas, ddim_alphas, ddim_alphas_prev = make_ddim_sampling_parameters(alphacums=alphas_cumprod,
                                                                                         ddim_timesteps=self.ddim_timesteps,
                                                                                         eta=ddim_eta,verbose=verbose)
+
         self.ddim_sigmas = ddim_sigmas
         self.ddim_alphas = ddim_alphas
         self.ddim_alphas_prev = ddim_alphas_prev
@@ -87,16 +92,14 @@ class PLMSSampler():
                ):
         if conditioning is not None:
             if isinstance(conditioning, dict):
-                ctmp = conditioning[list(conditioning.keys())[0]]
-                while isinstance(ctmp, list):
-                    ctmp = ctmp[0]
-                cbs = ctmp.shape[0]
+                cbs = conditioning[list(conditioning.keys())[0]].shape[0]
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
                 if conditioning.shape[0] != batch_size:
                     print(f"Warning: Got {conditioning.shape[0]} conditionings but batch-size is {batch_size}")
         self.make_schedule(ddim_num_steps=S, ddim_eta=eta, verbose=verbose)
+
         # sampling
         C, H, W = shape
         size = (batch_size, C, H, W)
@@ -126,10 +129,10 @@ class PLMSSampler():
                       unconditional_guidance_scale=1., unconditional_conditioning=None,):
         b = shape[0]
         if x_T is None:
-            img = ops.standard_normal(shape)
+            img = ms.ops.StandardNormal()(shape)
         else:
             img = x_T
-            
+
         if timesteps is None:
             timesteps = self.ddpm_num_timesteps if ddim_use_original_steps else self.ddim_timesteps
         elif timesteps is not None and not ddim_use_original_steps:
@@ -137,7 +140,7 @@ class PLMSSampler():
             timesteps = self.ddim_timesteps[:subset_end]
             
         intermediates = {'x_inter': [img], 'pred_x0': [img]}
-        time_range = list(reversed(range(0,timesteps))) if ddim_use_original_steps else ms.numpy.flip(timesteps)
+        time_range = list(reversed(range(0, timesteps))) if ddim_use_original_steps else ms.numpy.flip(timesteps)
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running PLMS Sampling with {total_steps} timesteps")
 
@@ -152,9 +155,9 @@ class PLMSSampler():
 
             if mask is not None:
                 assert x0 is not None
-                img_orig = self.model.q_sample(x0, ts, ms.numpy.randn(x0.shape))
+                img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
                 img = img_orig * mask + (1. - mask) * img
-                
+
             outs = self.p_sample_plms(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
@@ -184,25 +187,13 @@ class PLMSSampler():
         
         def get_model_output(x, t):
             if unconditional_conditioning is None or unconditional_guidance_scale == 1.:
-                e_t = self.model.apply_model(x, t, c_crossattn=c)
+                e_t = self.model.apply_model(x, t, c)
             else:
                 x_in = ops.concat((x, x), axis=0)
                 t_in = ops.concat((t, t), axis=0)
-                if isinstance(c, dict):
-                    assert isinstance(unconditional_conditioning, dict)
-                    c_in = dict()
-                    for k in c:
-                        if isinstance(c[k], list):
-                            c_in[k] = [
-                                ops.concat([unconditional_conditioning[k][i], c[k][i]], axis=0) for i in range(len(c[k]))
-                            ]
-                        else:
-                            c_in[k] = ops.concat([unconditional_conditioning[k], c[k]], axis=0)
-                    ldm_output = self.model.apply_model(x_in, t_in, **c_in)
-                else:
-                    c_in = ops.concat((unconditional_conditioning, c), axis=0)
-                    ldm_output = self.model.apply_model(x_in, t_in, c_crossattn=c_in)
-                e_t_uncond, e_t = ops.split(ldm_output, axis=0, output_num=2)
+                c_in = ops.concat((unconditional_conditioning, c), axis=0)
+                e_t_uncond, e_t = ops.split((self.model.apply_model(x_in, t_in, c_in)), 0, 2)
+
                 e_t = e_t_uncond + unconditional_guidance_scale * (e_t - e_t_uncond)
 
             if score_corrector is not None:
