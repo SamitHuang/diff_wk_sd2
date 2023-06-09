@@ -77,7 +77,7 @@ def main():
         "--prompt",
         type=str,
         nargs="?",
-        default="狗 绘画 写实风格",
+        default="A Van Gogh style oil painting of sunflower",
         help="the prompt to render"
     )
     parser.add_argument(
@@ -152,7 +152,7 @@ def main():
     parser.add_argument(
         "--scale",
         type=float,
-        default=7.5,
+        default=9.0,
         help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
     )
     parser.add_argument(
@@ -163,7 +163,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/v1-inference-chinese.yaml",
+        default="configs/v2-inference.yaml",
         help="path to config which constructs model",
     )
     parser.add_argument(
@@ -175,7 +175,7 @@ def main():
     parser.add_argument(
         "--ckpt_name",
         type=str,
-        default="wukong-huahua-ms.ckpt",
+        default="stablediffusionv2_512.ckpt",
         help="path to checkpoint of model",
     )
     parser.add_argument(
@@ -216,7 +216,7 @@ def main():
         sampler = PLMSSampler(model)
     os.makedirs(opt.output_path, exist_ok=True)
     outpath = opt.output_path
-    
+
     batch_size = opt.n_samples
     if not opt.data_path:
         prompt = opt.prompt
@@ -227,12 +227,12 @@ def main():
         print(f"reading prompts from {opt.prompt}")
         with open(opt.prompt, "r") as f:
             data = f.read().splitlines()
-            data = [batch_size * [prompt for prompt in data]] 
+            data = [batch_size * [prompt for prompt in data]]
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
     base_count = len(os.listdir(sample_path))
-    
+
     start_code = None
     if opt.fixed_code:
         stdnormal = ms.ops.StandardNormal()
@@ -249,6 +249,7 @@ def main():
             if isinstance(prompts, tuple):
                 prompts = list(prompts)
             c = model.get_learned_conditioning(prompts)
+
             shape = [4, opt.H // 8, opt.W // 8]
             samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                             conditioning=c,
@@ -260,18 +261,19 @@ def main():
                                             eta=opt.ddim_eta,
                                             x_T=start_code
                                             )
+
             x_samples_ddim = model.decode_first_stage(samples_ddim)
-            x_samples_ddim = ms.ops.clip_by_value((x_samples_ddim + 1.0) / 2.0, 
+            x_samples_ddim = ms.ops.clip_by_value((x_samples_ddim + 1.0) / 2.0,
                                                   clip_value_min=0.0, clip_value_max=1.0)
             x_samples_ddim_numpy = x_samples_ddim.asnumpy()
-            
+
             if not opt.skip_save:
                 for x_sample in x_samples_ddim_numpy:
                     x_sample = 255. * x_sample.transpose(1, 2, 0)
                     img = Image.fromarray(x_sample.astype(np.uint8))
                     img.save(os.path.join(sample_path, f"{base_count:05}.png"))
                     base_count += 1
-                    
+
             if not opt.skip_grid:
                 all_samples.append(x_samples_ddim_numpy)
 
@@ -280,6 +282,6 @@ def main():
 
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
-          
+
 if __name__ == "__main__":
     main()
